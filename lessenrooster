@@ -1,0 +1,163 @@
+#!/usr/bin/env perl
+
+use List::Util qw(first);
+
+my $rc_file = `echo \$HOME/.lessenroosterrc`;
+chomp($rc_file);
+open(my $fh, "<", $rc_file) or die "Can't open < $rc_file: $!";
+
+my @rosters;
+while (<$fh>) {
+    if (/^http/) {
+        chomp($_);
+        push(@rosters, $_);
+    } elsif (/^vakken/) {
+        last;
+    }
+}
+
+my @courses;
+while (<$fh>) {
+    chomp($_);
+    push(@courses, $_);
+}
+
+my $week;
+sub current_week {
+    my $html = $_[0] ? $_[0] : `curl -s "$rosters[0]"`;
+    return $1 if $html =~ m|week\s*</span><span class='header-6-0-1'>(\d+)<|;
+}
+
+if ($ARGV[0] =~ /^(\d+)$/) {
+    $week = $1;
+} elsif ($ARGV[0] =~ /^\+(\d+)$/) {
+    $week = current_week() + $1;
+} elsif ($ARGV[0] =~ /^\-(\d+)$/) {
+    $week = current_week() - $1;
+}
+
+my %roster;
+my @days = qw(ma di wo do vr za);
+my @times = qw(08:00 08:30 09:00 09:30 10:00 10:30 11:00 11:30 12:00 12:30 13:00 13:30 14:00 14:30 15:00 15:30 16:00 16:30 17:00 17:30 18:00);
+my @half_hour_intervals;
+
+sub add_roster {
+    my $raw = `curl -s "$_[0]"`;
+    $week = current_week($raw) unless $week;
+
+    my @roster1 = split("row-label-one'>", $raw);
+
+    my @header = split('</td>', shift(@roster1));
+
+    my @cols;
+    foreach (@header) {
+        if (/colspan='(\d+)'>(\w\w)/) {
+            my $i = $1;
+            push(@cols, $2) while $i--;
+        }
+    }
+
+    my @roster2;
+    for my $col (0 .. $#cols) {
+        foreach (@times) {
+            $roster2[$col]{$_}
+        }
+    }
+
+    while (my $i = shift(@roster1)) {
+        my $currcol = 0;
+        my @currcols = split("<td +[cs]", $i);
+        my $time = substr('0'.$1, -5, 5) if shift(@currcols) =~ /^(\d?\d:\d\d)/;
+        for my $j (0 .. $#currcols) {
+            if (@currcols[$j] =~ /colspan='1'\s+rowspan='(\d+)'/) {
+                my $rowspan = $1;
+                my $course = $1 if @currcols[$j] =~ m|<td align='left'>(.+?)</td>|;
+                if ($time =~ /30$/) {
+                    foreach (@courses) {
+                        if ($course =~ /^$_/) {
+                            push(@half_hour_intervals, $time);
+                            last;
+                        }
+                    }
+                }
+                my $type;
+                if ($course =~ /(HOC|hoorcollege)/i) {
+                    $type = $course =~ /WPO|werkcollege/i ? 'H+W' : 'HOC';
+                } elsif ($course =~ /WPO|werkcollege/i) {
+                    $type = 'WPO';
+                }
+                my $class = $1 if @currcols[$j] =~ m|<td align='left'>(\w\..+)</td>|;
+                my $timeidx = first {$times[$_] == $time} 0 .. $#times;
+                my $prevslots = 0;
+                for my $k (0 .. $j) {
+                    ++$prevslots if ($roster2[$k]{$time} && $roster2[$k]{$time}[0] ne $time);
+                }
+                my $day = $cols[$j - 1 + $prevslots];
+                foreach (0 .. $rowspan - 1) {
+                    push(@{$roster2[$j + $prevslots]{$times[$timeidx + $_]}}, $time);
+                    push(@{$roster2[$j + $prevslots]{$times[$timeidx + $_]}}, $course);
+                    push(@{$roster2[$j + $prevslots]{$times[$timeidx + $_]}}, $type);
+                    push(@{$roster2[$j + $prevslots]{$times[$timeidx + $_]}}, $class);
+                }
+            }
+        }
+    }
+    for my $i (0 .. $#cols) {
+        foreach my $time (@times) {
+            if ($roster2[$i]{$time}[1]) {
+                my $include;
+                foreach (@courses) {
+                    if ($roster2[$i]{$time}[1] =~ /^$_/i) {
+                        $include = 1;
+                        last;
+                    }
+                }
+                if ($include) {
+                    push(@{$roster{$cols[$i]}{$time}}, $roster2[$i]{$time}[1]);
+                    push(@{$roster{$cols[$i]}{$time}}, $roster2[$i]{$time}[2]);
+                    push(@{$roster{$cols[$i]}{$time}}, $roster2[$i]{$time}[3]);
+                }
+            }
+        }
+    }
+}
+
+foreach (@rosters) {
+    s/weeks=\d*/weeks=$week/;
+    add_roster($_);
+}
+
+my %conflicts;
+printf("   %2s | ", $week);
+printf("%20s | ", $_) foreach @days;
+print $/.'------+';
+print '----------------------+' foreach (0 .. 5);
+print $/;
+for my $time (@times) {
+    if ($time =~ /\d\d:00/ || grep(/^$time$/, @half_hour_intervals)) {
+        print $time.' | ';
+        for my $day (@days) {
+            if ($roster{$day}{$time}[3] && $roster{$day}{$time}[0] ne $roster{$day}{$time}[3]) {
+                push(@{$conflicts{$day}}, "conflict on $day @ $time: $roster{$day}{$time}[0] & $roster{$day}{$time}[3]$/");
+            }
+            printf("%20s | ", substr($roster{$day}{$time}[0], 0, 20));
+        }
+        print $/.'      | ';
+        for my $day (@days) {
+            printf("%3s", $roster{$day}{$time}[1]);
+            if ($roster{$day}{$time}[3] && $roster{$day}{$time}[0] eq $roster{$day}{$time}[3]) {
+                printf("%17s | ", substr(sprintf("%s, %s", $roster{$day}{$time}[2], $roster{$day}{$time}[5]), 0, 16));
+            } else {
+                printf("%17s | ", substr($roster{$day}{$time}[2], 0, 16));
+            }
+        }
+        print $/.'------+';
+        print '----------------------+' foreach (0 .. 5);
+        print $/;
+    }
+}
+
+foreach my $day (@days) {
+    print foreach (@{$conflicts{$day}});
+}
+
