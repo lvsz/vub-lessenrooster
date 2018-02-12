@@ -1,10 +1,38 @@
 #!/usr/bin/env perl
 
+use strict;
 use List::Util qw(first);
 
 my $rc_file = `echo \$HOME/.lessenroosterrc`;
+my $fh;
 chomp($rc_file);
-open(my $fh, "<", $rc_file) or die "Can't open < $rc_file: $!";
+
+while (!-e $rc_file) {
+    open(my $fh, ">", $rc_file) or die "Can't create > $rc_file: $!";
+    print $fh "studiejaren:$/";
+    print "Enter url of timetable or hit enter when done: $/> ";
+    while (chomp(my $url = <STDIN>)) {
+        if ($url) {
+            print $fh $url.$/;
+            print "Enter url of timetable: $/> ";
+        } else {
+            last;
+        }
+    }
+    print $fh "\nvakken:$/";
+    print "Enter courses of interest or hit enter when done: $/> ";
+    while (chomp(my $course = <STDIN>)) {
+        if ($course) {
+            print $fh $course.$/;
+            print "Enter courses of interest: $/> ";
+        } else {
+            last;
+        }
+    }
+    close $fh;
+}
+
+open($fh, "<", $rc_file) or die "Can't open < $rc_file: $!";
 
 my @rosters;
 while (<$fh>) {
@@ -21,6 +49,7 @@ while (<$fh>) {
     chomp($_);
     push(@courses, $_);
 }
+close $fh;
 
 my $week;
 sub current_week {
@@ -60,7 +89,7 @@ sub add_roster {
     my @roster2;
     for my $col (0 .. $#cols) {
         foreach (@times) {
-            $roster2[$col]{$_}
+            $roster2[$col]{$_};
         }
     }
 
@@ -69,9 +98,9 @@ sub add_roster {
         my @currcols = split("<td +[cs]", $i);
         my $time = substr('0'.$1, -5, 5) if shift(@currcols) =~ /^(\d?\d:\d\d)/;
         for my $j (0 .. $#currcols) {
-            if (@currcols[$j] =~ /colspan='1'\s+rowspan='(\d+)'/) {
+            if ($currcols[$j] =~ /colspan='1'\s+rowspan='(\d+)'/) {
                 my $rowspan = $1;
-                my $course = $1 if @currcols[$j] =~ m|<td align='left'>(.+?)</td>|;
+                my $course = $1 if $currcols[$j] =~ m|<td align='left'>(.+?)</td>|;
                 if ($time =~ /30$/) {
                     foreach (@courses) {
                         if ($course =~ /^$_/) {
@@ -86,8 +115,8 @@ sub add_roster {
                 } elsif ($course =~ /WPO|werkcollege/i) {
                     $type = 'WPO';
                 }
-                my $class = $1 if @currcols[$j] =~ m|<td align='left'>(\w\..+)</td>|;
-                my $timeidx = first {$times[$_] == $time} 0 .. $#times;
+                my $class = $1 if $currcols[$j] =~ m|<td align='left'>(\w\..+)</td>|;
+                my $timeidx = first {$times[$_] eq $time} 0 .. $#times;
                 my $prevslots = 0;
                 for my $k (0 .. $j) {
                     ++$prevslots if ($roster2[$k]{$time} && $roster2[$k]{$time}[0] ne $time);
