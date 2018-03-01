@@ -1,7 +1,11 @@
 #!/usr/bin/env perl
 
 use strict;
+use DateTime;
 use List::Util qw(first);
+
+my $version = "v1.1";
+my $timezone = 'Europe/Brussels';
 
 my $rc_file = `echo \$HOME/.lessenroosterrc`;
 my $fh;
@@ -52,17 +56,33 @@ while (<$fh>) {
 close $fh;
 
 my $week;
-sub current_week {
+sub get_week {
     my $html = $_[0] ? $_[0] : `curl -s "$rosters[0]"`;
-    return $1 if $html =~ m|week\s*</span><span class='header-6-0-1'>(\d+)<|;
+    return $1 if $html =~ /<span class='header-6-0-1'>(\d+)</;
 }
 
-if ($ARGV[0] =~ /^(\d+)$/) {
+my $date;
+my %months = qw(jan 01 feb 02 mrt 03 apr 04 mei 05 jun 06 jul 07 aug 08 sep 09 okt 10 nov 11 dec 12);
+sub get_date {
+    my ($day, $month, $year) = ($1, $2, $3) if $_[0] =~ /<span class='header-6-0-3'>(\d\d) (\w\w\w) (\d\d\d\d)</;
+    return DateTime->new(
+        year => $year,
+        month => $months{$month},
+        day => $day,
+        time_zone  => $timezone,
+    );
+}
+
+my $export_ics = 0;
+if ($ARGV[$export_ics] eq '-e') {
+    $export_ics = 1;
+}
+if ($ARGV[$export_ics] =~ /^(\d+)$/) {
     $week = $1;
-} elsif ($ARGV[0] =~ /^\+(\d+)$/) {
-    $week = current_week() + $1;
-} elsif ($ARGV[0] =~ /^\-(\d+)$/) {
-    $week = current_week() - $1;
+} elsif ($ARGV[$export_ics] =~ /^\+(\d+)$/) {
+    $week = get_week() + $1;
+} elsif ($ARGV[$export_ics] =~ /^\-(\d+)$/) {
+    $week = get_week() - $1;
 }
 
 my %roster;
@@ -72,7 +92,8 @@ my @half_hour_intervals;
 
 sub add_roster {
     my $raw = `curl -s "$_[0]"`;
-    $week = current_week($raw) unless $week;
+    $week = get_week($raw) unless $week;
+    $date = get_date($raw) unless $date;
 
     my @roster1 = split("row-label-one'>", $raw);
 
@@ -155,6 +176,49 @@ foreach (@rosters) {
     s/weeks=\d*/weeks=$week/;
     add_roster($_);
 }
+
+sub export_ics {
+    my $ics_file = "VUB lessenrooster week $week.ics";
+    open(my $fh, ">", $ics_file) or die "Can't create > $ics_file: $!";
+    my $dt = DateTime->now->set_time_zone($timezone);
+    my $current_date = $dt->date('');
+    my $current_time = $dt->hms('');
+    my $class_dt = $date->clone();
+    my $day_duration = DateTime::Duration->new(days => 1);
+
+    print $fh "BEGIN:VCALENDAR$/";
+    print $fh "METHOD:PUBLISH$/";
+    print $fh "VERSION:2.0$/";
+    print $fh "PRODID:-//lvsz//vub-lessenrooster $version//EN$/";
+    for my $day (@days) {
+        my $class_date = $class_dt->date('');
+        $class_dt->add($day_duration);
+        for my $t (0 .. $#times) {
+            my $time = $times[$t];
+            for my $i (0 .. $#{$roster{$day}{$time}} / 3) {
+                if ($roster{$day}{$time}[$i*3] and $roster{$day}{$times[$t-1]}[$i*3] ne $roster{$day}{$time}[$i*3]) {
+                    my $l = 0;
+                    ++$l while $roster{$day}{$times[$t+$l]}[$i*3] eq $roster{$day}{$time}[$i*3];
+                    my ($start_h, $start_m) = ($1, $2) if $time =~ /(\d\d):(\d\d)/;
+                    my ($end_h, $end_m) = ($start_h + int($l / 2), $start_m + 30 * ($l & 1));
+                    $end_h += 1, $end_m = 0 if $end_m == 60;
+                    print $fh "BEGIN:VEVENT$/";
+                    print $fh "UID:VUB-week-$week-$day-$time-$i$/";
+                    print $fh "SUMMARY:$roster{$day}{$time}[$i*3]$/";
+                    print $fh "LOCATION:$roster{$day}{$time}[$i*3+2]$/";
+                    printf $fh "DTSTART;TZID=$timezone:$class_date"."T%02d%02d00$/", $start_h, $start_m;
+                    printf $fh "DTEND;TZID=$timezone:$class_date"."T%02d%02d00$/", $end_h, $end_m;
+                    print $fh "DTSTAMP:$current_date"."T$current_time"."Z$/";
+                    print $fh "END:VEVENT$/";
+                }
+            }
+        }
+    }
+    print $fh "END:VCALENDAR$/";
+    close($fh);
+}
+
+export_ics() if $export_ics;
 
 my %conflicts;
 printf("   %2s | ", $week);
