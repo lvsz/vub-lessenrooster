@@ -7,10 +7,7 @@ use List::Util qw(first);
 my $version = "v1.1";
 my $timezone = 'Europe/Brussels';
 
-my $rc_file = `echo \$HOME/.lessenroosterrc`;
-my $fh;
-chomp($rc_file);
-
+chomp(my $rc_file = `echo \$HOME/.lessenroosterrc`);
 while (!-e $rc_file) {
     open(my $fh, ">", $rc_file) or die "Can't create > $rc_file: $!";
     print $fh "studiejaren:$/";
@@ -23,7 +20,7 @@ while (!-e $rc_file) {
             last;
         }
     }
-    print $fh "\nvakken:$/";
+    print $fh "$/vakken:$/";
     print "Enter courses of interest or hit enter when done: $/> ";
     while (chomp(my $course = <STDIN>)) {
         if ($course) {
@@ -36,7 +33,7 @@ while (!-e $rc_file) {
     close $fh;
 }
 
-open($fh, "<", $rc_file) or die "Can't open < $rc_file: $!";
+open(my $fh, "<", $rc_file) or die "Can't open < $rc_file: $!";
 
 my @rosters;
 while (<$fh>) {
