@@ -1,3 +1,7 @@
+# Important
+
+Due to changes to the VUB website, this program is no longer functional.
+
 # vub-lessenrooster
 Combines multiple VUB timetables into a single unit with only the classes you're interested in.
 
